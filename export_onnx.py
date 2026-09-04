@@ -110,20 +110,29 @@ def export_dialect(dialect_key: str, base_output_dir: str, quantize: bool = True
     print(f"2. Tracing and exporting to ONNX format: {onnx_path} ...")
 
     with torch.no_grad():
-        torch.onnx.export(
-            wrapper,
-            (input_ids, attention_mask),
-            onnx_path,
-            export_params=True,
-            opset_version=16,
-            do_constant_folding=True,
-            input_names=["input_ids", "attention_mask"],
-            output_names=["waveform"],
-            dynamic_axes={
+        export_kwargs = {
+            "export_params": True,
+            "opset_version": 16,
+            "do_constant_folding": True,
+            "input_names": ["input_ids", "attention_mask"],
+            "output_names": ["waveform"],
+            "dynamic_axes": {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
                 "attention_mask": {0: "batch_size", 1: "sequence_length"},
                 "waveform": {0: "batch_size", 2: "audio_samples"},
             },
+        }
+        # In PyTorch 2.5+, Dynamo exporter is used by default which fails on VITS ops (aten._is_all_true).
+        # We explicitly enforce the stable TorchScript exporter (dynamo=False).
+        import inspect
+        if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+            export_kwargs["dynamo"] = False
+
+        torch.onnx.export(
+            wrapper,
+            (input_ids, attention_mask),
+            onnx_path,
+            **export_kwargs,
         )
 
     onnx_size_mb = os.path.getsize(onnx_path) / (1024 * 1024)
