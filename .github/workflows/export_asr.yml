@@ -1,0 +1,155 @@
+name: Export Kurdish ASR (Whisper) to ONNX
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Whisper model size to export"
+        required: true
+        default: "tiny"
+        type: choice
+        options:
+          - tiny
+          - base
+          - all
+      quantize:
+        description: "Generate INT8 quantized models for offline mobile inference"
+        required: true
+        default: true
+        type: boolean
+      release_tag:
+        description: "Release tag name (e.g. asr-v1.0.0)"
+        required: false
+        default: "asr-v1.0.0"
+        type: string
+
+jobs:
+  export-asr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: "requirements.txt"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Whisper ASR to ONNX conversion & INT8 quantization
+        run: |
+          MODEL_CHOICE="${{ github.event.inputs.model || 'tiny' }}"
+          QUANTIZE_FLAG=""
+          if [ "${{ github.event.inputs.quantize }}" = "false" ]; then
+            QUANTIZE_FLAG="--no-quantize"
+          fi
+
+          echo "Exporting Whisper model: $MODEL_CHOICE"
+          python export_asr.py \
+            --model "$MODEL_CHOICE" \
+            --output-dir ./exported_asr_models \
+            $QUANTIZE_FLAG
+
+      - name: Display exported file structure & sizes
+        run: |
+          echo "### Exported Whisper ASR Models Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Model | File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          find ./exported_asr_models -type f -exec ls -lh {} + | awk '{print "| " $9 " | " $5 " |"}' >> $GITHUB_STEP_SUMMARY
+          ls -lhR ./exported_asr_models
+
+      - name: Upload Tiny ASR artifact
+        if: always() && (github.event.inputs.model == 'all' || github.event.inputs.model == 'tiny')
+        uses: actions/upload-artifact@v4
+        with:
+          name: kurdish-asr-whisper-tiny
+          path: exported_asr_models/whisper-tiny/
+          retention-days: 30
+
+      - name: Upload Base ASR artifact
+        if: always() && (github.event.inputs.model == 'all' || github.event.inputs.model == 'base')
+        uses: actions/upload-artifact@v4
+        with:
+          name: kurdish-asr-whisper-base
+          path: exported_asr_models/whisper-base/
+          retention-days: 30
+
+      - name: Upload All ASR models
+        uses: actions/upload-artifact@v4
+        with:
+          name: kurdish-asr-all-models
+          path: exported_asr_models/
+          retention-days: 30
+
+      - name: Package models for GitHub Release
+        id: package_release
+        run: |
+          mkdir -p release_assets
+          if [ -d "exported_asr_models/whisper-tiny" ]; then
+            (cd exported_asr_models/whisper-tiny && zip -r ../../release_assets/kurdish-asr-whisper-tiny-onnx.zip .)
+          fi
+          if [ -d "exported_asr_models/whisper-base" ]; then
+            (cd exported_asr_models/whisper-base && zip -r ../../release_assets/kurdish-asr-whisper-base-onnx.zip .)
+          fi
+          if [ -d "exported_asr_models" ]; then
+            (cd exported_asr_models && zip -r ../release_assets/kurdish-asr-all-onnx.zip .)
+          fi
+          ls -lh release_assets/
+
+      - name: Determine Release Tag
+        id: release_info
+        run: |
+          TAG="${{ github.event.inputs.release_tag || 'asr-v1.0.0' }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Selected release tag: $TAG"
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: Kurdish Offline ASR Models (${{ steps.release_info.outputs.tag }})
+          body: |
+            ## 🎙️ Kurdish Offline ASR (Whisper Speech-to-Text) ONNX Models
+
+            Pre-converted and INT8 quantized OpenAI Whisper models compatible with **`sherpa_onnx`** for 100% offline Speech-to-Text inference in Flutter, Android, iOS, and Desktop apps.
+
+            ### Language & Dialect Support:
+            - **Kurdish (`ku`)**: Sorani, Badini, Kurmanji (Language code: `ku`)
+            - **Multilingual**: Supports 99 languages out of the box
+
+            ### Files in each archive:
+            - `encoder.onnx` & `encoder.int8.onnx`: Audio encoder (~20MB for tiny)
+            - `decoder.onnx` & `decoder.int8.onnx`: Text decoder (~25MB for tiny)
+            - `tokens.txt`: Full vocabulary token mapping for sherpa-onnx
+            - `model_config.json`: Model configuration and sampling rate (16000 Hz)
+
+            ### Flutter `sherpa_onnx` Usage Example:
+            ```dart
+            final config = sherpa.OfflineRecognizerConfig(
+              model: sherpa.OfflineModelConfig(
+                whisper: sherpa.OfflineWhisperModelConfig(
+                  encoder: 'assets/asr/encoder.int8.onnx',
+                  decoder: 'assets/asr/decoder.int8.onnx',
+                  language: 'ku',
+                  task: 'transcribe',
+                ),
+                tokens: 'assets/asr/tokens.txt',
+                numThreads: 2,
+              ),
+            );
+            final recognizer = sherpa.OfflineRecognizer(config);
+            ```
+          files: release_assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

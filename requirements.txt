@@ -9,3 +9,5 @@ scipy>=1.10.0
 soundfile>=0.12.1
 accelerate>=0.28.0
 tqdm>=4.66.0
+openai-whisper>=20231117
+tiktoken

@@ -81,3 +81,46 @@ flutter:
     - assets/models/sorani/model.int8.onnx
     - assets/models/sorani/tokens.txt
 ```
+
+---
+
+## 4. Kurdish Offline ASR (Whisper Speech-to-Text)
+
+This repository also includes an automated pipeline to export **OpenAI Whisper** models into ONNX and INT8 format for 100% offline Kurdish Speech-to-Text recognition using `sherpa_onnx`.
+
+### Supported Languages:
+- **Kurdish (`ku`)**: Sorani, Badini, and Kurmanji.
+- **Multilingual**: Supports 99 languages.
+
+### Trigger via GitHub Actions:
+1. Go to the **Actions** tab on GitHub.
+2. Select **"Export Kurdish ASR (Whisper) to ONNX"**.
+3. Choose model size (`tiny` ~45MB INT8 or `base` ~85MB INT8).
+4. Click **Run workflow** to generate downloadable Release packages!
+
+### Using ASR in Flutter with `sherpa_onnx`:
+
+```dart
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
+
+final config = sherpa.OfflineRecognizerConfig(
+  model: sherpa.OfflineModelConfig(
+    whisper: sherpa.OfflineWhisperModelConfig(
+      encoder: 'assets/asr/encoder.int8.onnx',
+      decoder: 'assets/asr/decoder.int8.onnx',
+      language: 'ku', // Kurdish
+      task: 'transcribe',
+    ),
+    tokens: 'assets/asr/tokens.txt',
+    numThreads: 2,
+    provider: 'cpu',
+  ),
+);
+
+final recognizer = sherpa.OfflineRecognizer(config);
+final stream = recognizer.createStream();
+stream.acceptWaveform(samples: audioSamples, sampleRate: 16000);
+recognizer.decode(stream);
+final result = recognizer.getResult(stream);
+print('Transcribed Kurdish text: ${result.text}');
+```
