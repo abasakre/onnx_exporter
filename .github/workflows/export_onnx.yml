@@ -17,7 +17,14 @@ on:
         required: true
         default: true
         type: boolean
+      release_tag:
+        description: "Release tag name (e.g. v1.0.0) - leave empty to skip Release creation"
+        required: false
+        default: ""
+        type: string
   push:
+    tags:
+      - 'v*'
     paths:
       - 'export_onnx.py'
       - 'requirements.txt'
@@ -94,3 +101,45 @@ jobs:
           name: kurdish-tts-onnx-all
           path: exported_models/
           retention-days: 30
+
+      - name: Package models for GitHub Release
+        id: package_release
+        run: |
+          mkdir -p release_assets
+          if [ -d "exported_models/sorani" ]; then
+            (cd exported_models/sorani && zip -r ../../release_assets/kurdish-tts-sorani-onnx.zip .)
+          fi
+          if [ -d "exported_models/badini" ]; then
+            (cd exported_models/badini && zip -r ../../release_assets/kurdish-tts-badini-onnx.zip .)
+          fi
+          if [ -d "exported_models" ]; then
+            (cd exported_models && zip -r ../release_assets/kurdish-tts-all-onnx.zip .)
+          fi
+          ls -lh release_assets/
+
+      - name: Create or Update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event.inputs.release_tag != '' && github.event.inputs.release_tag != null)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.event.inputs.release_tag }}
+          name: Release ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.event.inputs.release_tag }}
+          body: |
+            ## 🎙️ Kurdish Offline TTS ONNX Models
+
+            Pre-converted and quantized ONNX models for offline Text-to-Speech in Flutter, Mobile, and Desktop applications.
+
+            ### Included Dialects:
+            - **Sorani (سۆرانی)**: based on `akam-ot/ckb-tts`
+            - **Badini (بادینی)**: based on `akam-ot/mms-tts-kmr-arabic-finetune-base`
+
+            ### Files inside each archive:
+            - `model.onnx`: Full FP32 precision model (~330 MB)
+            - `model.int8.onnx`: INT8 Quantized model (~85 MB) - recommended for mobile/Flutter
+            - `tokens.txt`: Vocabulary mapping for ONNX Runtime / Sherpa-ONNX
+            - `model_config.json`: Dialect and sampling rate config (16000 Hz)
+            - `sample_test.wav`: Audio generated during verification
+          files: release_assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
