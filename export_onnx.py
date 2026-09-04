@@ -15,6 +15,7 @@ import sys
 import shutil
 import numpy as np
 
+from huggingface_hub import hf_hub_download
 import torch
 from transformers import AutoTokenizer, VitsModel
 import onnx
@@ -27,11 +28,21 @@ MODEL_REGISTRY = {
         "repo_id": "akam-ot/ckb-tts",
         "name": "ckb-tts",
         "sample_text": "سڵاو چۆنی، هیوادارم باش بیت",
+        "type": "vits",
     },
     "badini": {
         "repo_id": "akam-ot/mms-tts-kmr-arabic-finetune-base",
         "name": "kmr-tts",
         "sample_text": "سلاڤ، ئەز نها ب کوردی دئاخڤم",
+        "type": "vits",
+    },
+    "kurmanji": {
+        "repo_id": "rojanu/piper-ku-berfin-renas-medium",
+        "name": "kurmanji-piper",
+        "sample_text": "Slav, ez niha bi kurdî diaxivim",
+        "type": "piper",
+        "onnx_filename": "ku-berfin_renas-medium.onnx",
+        "json_filename": "ku-berfin_renas-medium.onnx.json",
     },
 }
 
@@ -71,7 +82,7 @@ def export_tokens_file(tokenizer, output_path: str):
 def export_dialect(dialect_key: str, base_output_dir: str, quantize: bool = True, verify: bool = True):
     info = MODEL_REGISTRY[dialect_key]
     repo_id = info["repo_id"]
-    model_name = info["name"]
+    model_type = info.get("type", "vits")
     target_dir = os.path.join(base_output_dir, dialect_key)
     os.makedirs(target_dir, exist_ok=True)
 
@@ -79,64 +90,113 @@ def export_dialect(dialect_key: str, base_output_dir: str, quantize: bool = True
     print(f"🚀 Exporting {dialect_key.upper()} ({repo_id})")
     print(f"=======================================================")
 
-    print("1. Downloading model and tokenizer from Hugging Face...")
-    tokenizer = AutoTokenizer.from_pretrained(repo_id)
-    model = VitsModel.from_pretrained(repo_id).eval()
-    wrapper = VitsInferenceWrapper(model).eval()
-
-    sample_rate = model.config.sampling_rate
-    print(f"   Sampling Rate: {sample_rate} Hz")
-
-    # Save tokens.txt and config.json
-    tokens_file = os.path.join(target_dir, "tokens.txt")
-    export_tokens_file(tokenizer, tokens_file)
-
-    meta_config = {
-        "model_id": repo_id,
-        "dialect": dialect_key,
-        "sampling_rate": sample_rate,
-        "model_type": "vits",
-    }
-    with open(os.path.join(target_dir, "model_config.json"), "w", encoding="utf-8") as f:
-        json.dump(meta_config, f, indent=2, ensure_ascii=False)
-
-    # Prepare dummy input for tracing
-    sample_text = normalize_kurdish_text(info["sample_text"])
-    inputs = tokenizer(sample_text, return_tensors="pt")
-    input_ids = inputs["input_ids"]
-    attention_mask = inputs.get("attention_mask", torch.ones_like(input_ids))
-
     onnx_path = os.path.join(target_dir, "model.onnx")
-    print(f"2. Tracing and exporting to ONNX format: {onnx_path} ...")
 
-    with torch.no_grad():
-        export_kwargs = {
-            "export_params": True,
-            "opset_version": 16,
-            "do_constant_folding": True,
-            "input_names": ["input_ids", "attention_mask"],
-            "output_names": ["waveform"],
-            "dynamic_axes": {
-                "input_ids": {0: "batch_size", 1: "sequence_length"},
-                "attention_mask": {0: "batch_size", 1: "sequence_length"},
-                "waveform": {0: "batch_size", 2: "audio_samples"},
-            },
+    if model_type == "piper":
+        print(f"1. Downloading Piper ONNX model & config from Hugging Face ({repo_id})...")
+        downloaded_onnx = hf_hub_download(repo_id=repo_id, filename=info["onnx_filename"])
+        downloaded_json = hf_hub_download(repo_id=repo_id, filename=info["json_filename"])
+
+        with open(downloaded_json, "r", encoding="utf-8") as f:
+            piper_cfg = json.load(f)
+
+        sample_rate = piper_cfg.get("audio", {}).get("sample_rate", 22050)
+        speakers = piper_cfg.get("speaker_id_map", {"Berfin": 0, "Renas": 1})
+        print(f"   Sampling Rate: {sample_rate} Hz")
+        print(f"   Available Speakers: {speakers}")
+
+        shutil.copyfile(downloaded_onnx, onnx_path)
+        shutil.copyfile(downloaded_json, os.path.join(target_dir, "model.onnx.json"))
+
+        # Generate tokens.txt from phoneme_id_map
+        tokens_file = os.path.join(target_dir, "tokens.txt")
+        phoneme_id_map = piper_cfg.get("phoneme_id_map", {})
+        sorted_tokens = []
+        for phoneme, ids in phoneme_id_map.items():
+            for i in ids:
+                sorted_tokens.append((phoneme, i))
+        sorted_tokens.sort(key=lambda x: x[1])
+
+        with open(tokens_file, "w", encoding="utf-8") as f:
+            for token, idx in sorted_tokens:
+                f.write(f"{token} {idx}\n")
+        print(f"  ✓ Saved tokens file: {tokens_file} ({len(sorted_tokens)} tokens)")
+
+        # Save metadata config
+        meta_config = {
+            "model_id": repo_id,
+            "dialect": dialect_key,
+            "sampling_rate": sample_rate,
+            "model_type": "piper",
+            "speakers": speakers,
+            "phoneme_type": piper_cfg.get("phoneme_type", "espeak"),
+            "espeak_voice": piper_cfg.get("espeak", {}).get("voice", "ku"),
         }
-        # In PyTorch 2.5+, Dynamo exporter is used by default which fails on VITS ops (aten._is_all_true).
-        # We explicitly enforce the stable TorchScript exporter (dynamo=False).
-        import inspect
-        if "dynamo" in inspect.signature(torch.onnx.export).parameters:
-            export_kwargs["dynamo"] = False
+        with open(os.path.join(target_dir, "model_config.json"), "w", encoding="utf-8") as f:
+            json.dump(meta_config, f, indent=2, ensure_ascii=False)
 
-        torch.onnx.export(
-            wrapper,
-            (input_ids, attention_mask),
-            onnx_path,
-            **export_kwargs,
-        )
+        onnx_size_mb = os.path.getsize(onnx_path) / (1024 * 1024)
+        print(f"  ✓ Model ONNX ready: {onnx_size_mb:.2f} MB")
 
-    onnx_size_mb = os.path.getsize(onnx_path) / (1024 * 1024)
-    print(f"  ✓ Exported model.onnx: {onnx_size_mb:.2f} MB")
+    else:
+        # Standard Hugging Face VitsModel export
+        print("1. Downloading model and tokenizer from Hugging Face...")
+        tokenizer = AutoTokenizer.from_pretrained(repo_id)
+        model = VitsModel.from_pretrained(repo_id).eval()
+        wrapper = VitsInferenceWrapper(model).eval()
+
+        sample_rate = model.config.sampling_rate
+        print(f"   Sampling Rate: {sample_rate} Hz")
+
+        # Save tokens.txt and config.json
+        tokens_file = os.path.join(target_dir, "tokens.txt")
+        export_tokens_file(tokenizer, tokens_file)
+
+        meta_config = {
+            "model_id": repo_id,
+            "dialect": dialect_key,
+            "sampling_rate": sample_rate,
+            "model_type": "vits",
+        }
+        with open(os.path.join(target_dir, "model_config.json"), "w", encoding="utf-8") as f:
+            json.dump(meta_config, f, indent=2, ensure_ascii=False)
+
+        # Prepare dummy input for tracing
+        sample_text = normalize_kurdish_text(info["sample_text"])
+        inputs = tokenizer(sample_text, return_tensors="pt")
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs.get("attention_mask", torch.ones_like(input_ids))
+
+        print(f"2. Tracing and exporting to ONNX format: {onnx_path} ...")
+
+        with torch.no_grad():
+            export_kwargs = {
+                "export_params": True,
+                "opset_version": 16,
+                "do_constant_folding": True,
+                "input_names": ["input_ids", "attention_mask"],
+                "output_names": ["waveform"],
+                "dynamic_axes": {
+                    "input_ids": {0: "batch_size", 1: "sequence_length"},
+                    "attention_mask": {0: "batch_size", 1: "sequence_length"},
+                    "waveform": {0: "batch_size", 2: "audio_samples"},
+                },
+            }
+            # In PyTorch 2.5+, Dynamo exporter is used by default which fails on VITS ops (aten._is_all_true).
+            # We explicitly enforce the stable TorchScript exporter (dynamo=False).
+            import inspect
+            if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+                export_kwargs["dynamo"] = False
+
+            torch.onnx.export(
+                wrapper,
+                (input_ids, attention_mask),
+                onnx_path,
+                **export_kwargs,
+            )
+
+        onnx_size_mb = os.path.getsize(onnx_path) / (1024 * 1024)
+        print(f"  ✓ Exported model.onnx: {onnx_size_mb:.2f} MB")
 
     # Check and simplify model
     print("3. Validating ONNX model integrity...")
@@ -163,16 +223,31 @@ def export_dialect(dialect_key: str, base_output_dir: str, quantize: bool = True
         print(f"5. Verifying inference with ONNX Runtime ({os.path.basename(test_model_path)})...")
         session = ort.InferenceSession(test_model_path, providers=["CPUExecutionProvider"])
 
-        test_text = normalize_kurdish_text(info["sample_text"])
-        test_inputs = tokenizer(test_text, return_tensors="np")
+        if model_type == "piper":
+            # Test inference with sample phoneme IDs (Slav)
+            phonemes = np.array([[1, 31, 24, 14, 34, 2]], dtype=np.int64)
+            lengths = np.array([phonemes.shape[1]], dtype=np.int64)
+            scales = np.array([0.667, 1.0, 0.8], dtype=np.float32)
+            sid = np.array([0], dtype=np.int64)
+            ort_inputs = {
+                "input": phonemes,
+                "input_lengths": lengths,
+                "scales": scales,
+                "sid": sid,
+            }
+            ort_outputs = session.run(None, ort_inputs)
+            waveform = np.squeeze(ort_outputs[0])
+        else:
+            test_text = normalize_kurdish_text(info["sample_text"])
+            test_inputs = tokenizer(test_text, return_tensors="np")
 
-        ort_inputs = {
-            "input_ids": test_inputs["input_ids"].astype(np.int64),
-            "attention_mask": test_inputs.get("attention_mask", np.ones_like(test_inputs["input_ids"])).astype(np.int64),
-        }
+            ort_inputs = {
+                "input_ids": test_inputs["input_ids"].astype(np.int64),
+                "attention_mask": test_inputs.get("attention_mask", np.ones_like(test_inputs["input_ids"])).astype(np.int64),
+            }
 
-        ort_outputs = session.run(None, ort_inputs)
-        waveform = np.squeeze(ort_outputs[0])
+            ort_outputs = session.run(None, ort_inputs)
+            waveform = np.squeeze(ort_outputs[0])
 
         # Normalize waveform
         peak = np.max(np.abs(waveform))
@@ -190,7 +265,7 @@ def main():
     parser = argparse.ArgumentParser(description="Export Kurdish TTS models to ONNX and INT8.")
     parser.add_argument(
         "--dialect",
-        choices=["sorani", "badini", "all"],
+        choices=["sorani", "badini", "kurmanji", "all"],
         default="all",
         help="Which dialect to export (default: all)",
     )
@@ -212,7 +287,7 @@ def main():
 
     args = parser.parse_args()
 
-    dialects = ["sorani", "badini"] if args.dialect == "all" else [args.dialect]
+    dialects = ["sorani", "badini", "kurmanji"] if args.dialect == "all" else [args.dialect]
 
     for d in dialects:
         export_dialect(

@@ -1,8 +1,9 @@
 # Kurdish TTS to ONNX Exporter & Quantizer
 
-This sub-folder contains tools to convert the Hugging Face Kurdish Text-to-Speech models:
-- **Sorani (سۆرانی)**: [`akam-ot/ckb-tts`](https://huggingface.co/akam-ot/ckb-tts)
-- **Badini (بادینی)**: [`akam-ot/mms-tts-kmr-arabic-finetune-base`](https://huggingface.co/akam-ot/mms-tts-kmr-arabic-finetune-base)
+This project contains tools to convert the Hugging Face Kurdish Text-to-Speech models:
+- **Sorani (سۆرانی)**: [`akam-ot/ckb-tts`](https://huggingface.co/akam-ot/ckb-tts) (Arabic script)
+- **Badini (بادینی)**: [`akam-ot/mms-tts-kmr-arabic-finetune-base`](https://huggingface.co/akam-ot/mms-tts-kmr-arabic-finetune-base) (Arabic script)
+- **Kurmanji (کرمانجی)**: [`rojanu/piper-ku-berfin-renas-medium`](https://huggingface.co/rojanu/piper-ku-berfin-renas-medium) (Latin script, 2 voices: Berfin & Renas)
 
 into optimized **ONNX** and **INT8 Quantized** models for 100% offline inference in Flutter, Mobile, and Desktop applications.
 

@@ -12,6 +12,7 @@ on:
           - all
           - sorani
           - badini
+          - kurmanji
       quantize:
         description: "Generate INT8 quantized models (~85MB) for mobile"
         required: true
@@ -93,6 +94,14 @@ jobs:
           path: exported_models/badini/
           retention-days: 30
 
+      - name: Upload Kurmanji ONNX artifact
+        if: always() && (github.event.inputs.dialect == 'all' || github.event.inputs.dialect == 'kurmanji' || github.event_name == 'push')
+        uses: actions/upload-artifact@v4
+        with:
+          name: kurdish-tts-onnx-kurmanji
+          path: exported_models/kurmanji/
+          retention-days: 30
+
       - name: Upload All ONNX models
         uses: actions/upload-artifact@v4
         with:
@@ -109,6 +118,9 @@ jobs:
           fi
           if [ -d "exported_models/badini" ]; then
             (cd exported_models/badini && zip -r ../../release_assets/kurdish-tts-badini-onnx.zip .)
+          fi
+          if [ -d "exported_models/kurmanji" ]; then
+            (cd exported_models/kurmanji && zip -r ../../release_assets/kurdish-tts-kurmanji-onnx.zip .)
           fi
           if [ -d "exported_models" ]; then
             (cd exported_models && zip -r ../release_assets/kurdish-tts-all-onnx.zip .)
@@ -136,17 +148,18 @@ jobs:
           body: |
             ## 🎙️ Kurdish Offline TTS ONNX Models
 
-            Pre-converted and quantized ONNX models for offline Text-to-Speech in Flutter, Mobile, and Desktop applications.
+            Pre-converted and INT8 quantized ONNX models for offline Text-to-Speech in Flutter, Mobile, and Desktop applications.
 
             ### Included Dialects:
-            - **Sorani (سۆرانی)**: based on `akam-ot/ckb-tts`
-            - **Badini (بادینی)**: based on `akam-ot/mms-tts-kmr-arabic-finetune-base`
+            - **Sorani (سۆرانی)**: based on `akam-ot/ckb-tts` (Arabic script, 16000 Hz)
+            - **Badini (بادینی)**: based on `akam-ot/mms-tts-kmr-arabic-finetune-base` (Arabic script, 16000 Hz)
+            - **Kurmanji (کرمانجی)**: based on `rojanu/piper-ku-berfin-renas-medium` (Latin script, 22050 Hz, 2 voices: Berfin & Renas)
 
             ### Files inside each archive:
-            - `model.onnx`: Full FP32 precision model (~330 MB)
-            - `model.int8.onnx`: INT8 Quantized model (~85 MB) - recommended for mobile/Flutter
-            - `tokens.txt`: Vocabulary mapping for ONNX Runtime / Sherpa-ONNX
-            - `model_config.json`: Dialect and sampling rate config (16000 Hz)
+            - `model.onnx`: Full FP32 precision model
+            - `model.int8.onnx`: INT8 Quantized model (recommended for mobile/Flutter offline inference)
+            - `tokens.txt`: Vocabulary / phoneme mapping for ONNX Runtime / Sherpa-ONNX
+            - `model_config.json`: Dialect, speakers, and sampling rate configuration
             - `sample_test.wav`: Audio generated during verification
           files: release_assets/*
           draft: false
