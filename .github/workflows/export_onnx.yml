@@ -23,17 +23,15 @@ on:
         default: ""
         type: string
   push:
+    branches:
+      - main
     tags:
       - 'v*'
-    paths:
-      - 'export_onnx.py'
-      - 'requirements.txt'
-      - '.github/workflows/**'
+    paths-ignore:
+      - 'README.md'
   pull_request:
-    paths:
-      - 'export_onnx.py'
-      - 'requirements.txt'
-      - '.github/workflows/**'
+    branches:
+      - main
 
 jobs:
   export-onnx:
